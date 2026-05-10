@@ -408,8 +408,20 @@ async def cb_meet_alts(call: CallbackQuery):
     alts = await suggest_alternatives(free_slots, proposed)
 
     if not alts:
-        await call.answer("Не нашёл альтернативных слотов")
-        return
+        # Generate fallback alternatives without calendar
+        from datetime import datetime, timedelta
+        alts = []
+        base = datetime.now()
+        for i in range(1, 5):
+            dt = base + timedelta(days=i)
+            if dt.weekday() < 5:
+                alts.append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "time": "14:00",
+                    "label": dt.strftime("%d %B в 14:00")
+                })
+            if len(alts) == 3:
+                break
 
     meeting_state[call.from_user.id] = {"meeting_id": meeting_id, "alternatives": alts}
     await call.message.edit_text(
@@ -440,6 +452,20 @@ async def cb_meet_alt_select(call: CallbackQuery):
         reply_markup=meeting_confirm_keyboard(meeting_id)
     )
     await call.answer(f"Выбрано: {alt['label']}")
+
+
+@router.callback_query(F.data.startswith("meet_edittime_"))
+async def cb_meet_edittime(call: CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        return
+    meeting_id = int(call.data.split("_")[2])
+    meeting_state[call.from_user.id] = {
+        "meeting_id": meeting_id,
+        "missing": [],
+        "current_field": "time"
+    }
+    await call.message.answer("🕐 Введи новое время в формате ЧЧ:ММ (например: 15:30)")
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("meet_back_"))
@@ -593,8 +619,11 @@ async def handle_message(msg: Message):
     # ── Owner messages ──
 
     # Проверка встречи
+    # Lower threshold for forwarded messages
+    is_forwarded = bool(msg.forward_date or msg.forward_from or msg.forward_sender_name)
+    meet_threshold = 0.55 if is_forwarded else 0.75
     meet_result = await classify_meeting(text)
-    if meet_result.get("is_meeting") and meet_result.get("confidence", 0) > 0.75:
+    if meet_result.get("is_meeting") and meet_result.get("confidence", 0) > meet_threshold:
         meeting = await extract_meeting(text)
         meeting_id = save_meeting(
             owner_id=OWNER_ID,
